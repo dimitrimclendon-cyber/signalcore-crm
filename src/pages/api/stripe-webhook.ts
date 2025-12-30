@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next'
 import { createClient } from '@supabase/supabase-js'
+import https from 'https'
 
 // Use service role key for admin operations
 const supabaseAdmin = createClient(
@@ -75,6 +76,93 @@ function generatePassword(length = 12): string {
   return password
 }
 
+// Send welcome email via Resend
+async function sendWelcomeEmail(email: string, name: string, tempPassword: string, tier: string): Promise<void> {
+  const resendApiKey = process.env.RESEND_API_KEY
+  if (!resendApiKey) {
+    console.log('RESEND_API_KEY not configured - skipping email')
+    return
+  }
+
+  const tierNames: Record<string, string> = {
+    feed: 'The Feed',
+    priority: 'Priority Intel',
+    executive: 'Executive Partner'
+  }
+
+  const tierName = tierNames[tier] || 'The Feed'
+
+  const emailHtml = `
+    <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 600px; margin: 0 auto; background: #0f172a; color: #fff; padding: 40px; border-radius: 16px;">
+      <div style="text-align: center; margin-bottom: 30px;">
+        <h1 style="color: #10b981; margin: 0;">Welcome to SignalCore!</h1>
+        <p style="color: #94a3b8; margin-top: 10px;">Your ${tierName} subscription is now active</p>
+      </div>
+      
+      <div style="background: #1e293b; padding: 24px; border-radius: 12px; margin-bottom: 24px;">
+        <h2 style="color: #fff; margin: 0 0 16px 0; font-size: 18px;">Your Login Credentials</h2>
+        <p style="margin: 8px 0; color: #cbd5e1;"><strong>Email:</strong> ${email}</p>
+        <p style="margin: 8px 0; color: #cbd5e1;"><strong>Temporary Password:</strong> <code style="background: #334155; padding: 4px 8px; border-radius: 4px; color: #10b981;">${tempPassword}</code></p>
+      </div>
+      
+      <div style="text-align: center; margin-bottom: 24px;">
+        <a href="https://portal.signalcoredata.com/login" style="display: inline-block; background: #10b981; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Access Your Portal →</a>
+      </div>
+      
+      <p style="color: #64748b; font-size: 14px; text-align: center;">
+        We recommend changing your password after your first login.<br>
+        Questions? Reply to this email or contact leads@signalcoredata.com
+      </p>
+      
+      <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;">
+      
+      <p style="color: #64748b; font-size: 12px; text-align: center;">
+        SignalCore Data | Predictive Commercial HVAC Intelligence<br>
+        Spokane, WA
+      </p>
+    </div>
+  `
+
+  const postData = JSON.stringify({
+    from: 'SignalCore <noreply@signalcoredata.com>',
+    to: [email],
+    subject: `Welcome to SignalCore ${tierName}! Your login credentials`,
+    html: emailHtml
+  })
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.resend.com',
+      port: 443,
+      path: '/emails',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${resendApiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    }, (res) => {
+      let data = ''
+      res.on('data', chunk => data += chunk)
+      res.on('end', () => {
+        if (res.statusCode === 200 || res.statusCode === 201) {
+          console.log(`Welcome email sent to ${email}`)
+          resolve()
+        } else {
+          console.error(`Email send failed: ${res.statusCode} - ${data}`)
+          resolve() // Don't fail the webhook if email fails
+        }
+      })
+    })
+    req.on('error', (e) => {
+      console.error(`Email send error: ${e.message}`)
+      resolve() // Don't fail the webhook if email fails
+    })
+    req.write(postData)
+    req.end()
+  })
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
@@ -128,7 +216,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tier = 'feed'
       monthlyFee = 750
     }
-
 
     console.log(`Processing new subscription: ${email}, tier: ${tier}`)
 
@@ -203,9 +290,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         details: `${name} subscribed to ${tier === 'feed' ? 'The Feed' : tier === 'priority' ? 'Priority Intel' : 'Executive Partner'} ($${monthlyFee}/mo)`,
       }])
 
-    // 5. TODO: Send welcome email with tempPassword
-    // This would use a service like SendGrid, Resend, or Supabase's built-in email
-    console.log(`Welcome email would be sent to ${email} with temp password: ${tempPassword}`)
+    // 5. Send welcome email with credentials
+    await sendWelcomeEmail(email, name, tempPassword, tier)
 
     return res.status(200).json({ 
       success: true, 
