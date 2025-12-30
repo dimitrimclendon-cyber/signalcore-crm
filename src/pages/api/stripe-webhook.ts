@@ -112,15 +112,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const email = session.customer_details?.email || session.customer_email
     const name = session.customer_details?.name || 'Contractor'
     const phone = session.customer_details?.phone || ''
-    const tier = session.metadata?.tier || 'feed'
     
-    // Calculate monthly fee from tier
-    const monthlyFees: Record<string, number> = {
-      feed: 750,
-      priority: 2500,
-      executive: 5000
+    // Detect tier from payment amount (amount_total is in cents)
+    const amountInDollars = (session.amount_total || 0) / 100
+    let tier = 'feed'
+    let monthlyFee = 750
+    
+    if (amountInDollars >= 4500) {
+      tier = 'executive'
+      monthlyFee = 5000
+    } else if (amountInDollars >= 2000) {
+      tier = 'priority'
+      monthlyFee = 2500
+    } else {
+      tier = 'feed'
+      monthlyFee = 750
     }
-    const monthlyFee = monthlyFees[tier] || 750
+
 
     console.log(`Processing new subscription: ${email}, tier: ${tier}`)
 
