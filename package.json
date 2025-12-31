@@ -9,13 +9,14 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.89.0",
+    "clsx": "^2.1.0",
+    "lucide-react": "^0.300.0",
     "next": "12.3.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@supabase/supabase-js": "^1.35.7",
     "recharts": "^2.10.0",
-    "lucide-react": "^0.300.0",
-    "clsx": "^2.1.0",
+    "resend": "^6.4.2",
     "tailwind-merge": "^2.2.0"
   },
   "devDependencies": {

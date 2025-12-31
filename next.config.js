@@ -2,8 +2,8 @@
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
-    esmExternals: false
-  }
-}
+    esmExternals: true,
+  },
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;

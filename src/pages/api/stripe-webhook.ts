@@ -1,305 +1,310 @@
-import { NextApiRequest, NextApiResponse } from 'next'
-import { createClient } from '@supabase/supabase-js'
-import https from 'https'
+import { NextApiRequest, NextApiResponse } from "next";
+import { createClient } from "@supabase/supabase-js";
+import { resend } from "@/lib/resend";
+import crypto from "crypto";
 
 // Use service role key for admin operations
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-// Stripe SDK not available in Node 14, so we verify manually
-import crypto from 'crypto'
+);
 
 interface StripeWebhookBody {
-  id: string
-  type: string
+  id: string;
+  type: string;
   data: {
     object: {
-      id: string
-      customer_email: string
-      customer_details: {
-        email: string
-        name: string
-        phone?: string
-      }
-      metadata: {
-        tier?: string
-      }
-      amount_total: number
-    }
-  }
+      id: string;
+      customer?: string;
+      customer_email?: string;
+      customer_details?: {
+        email: string;
+        name: string;
+        phone?: string;
+      };
+      metadata?: {
+        tier?: string;
+      };
+      amount_total?: number;
+      billing_reason?: string;
+    };
+  };
 }
 
 export const config = {
   api: {
     bodyParser: false, // Stripe requires raw body for signature verification
   },
-}
+};
 
 // Read raw body for signature verification
 async function getRawBody(req: NextApiRequest): Promise<Buffer> {
-  const chunks: Buffer[] = []
+  const chunks: Buffer[] = [];
   for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
   }
-  return Buffer.concat(chunks)
+  return Buffer.concat(chunks);
 }
 
 // Verify Stripe signature
-function verifyStripeSignature(payload: Buffer, signature: string, secret: string): boolean {
-  const sigParts = signature.split(',').reduce((acc, part) => {
-    const [key, value] = part.split('=')
-    acc[key] = value
-    return acc
-  }, {} as Record<string, string>)
+function verifyStripeSignature(
+  payload: Buffer,
+  signature: string,
+  secret: string
+): boolean {
+  const sigParts = signature.split(",").reduce((acc, part) => {
+    const [key, value] = part.split("=");
+    acc[key] = value;
+    return acc;
+  }, {} as Record<string, string>);
 
-  const timestamp = sigParts['t']
-  const expectedSig = sigParts['v1']
+  const timestamp = sigParts["t"];
+  const expectedSig = sigParts["v1"];
 
-  const signedPayload = `${timestamp}.${payload.toString()}`
+  const signedPayload = `${timestamp}.${payload.toString()}`;
   const computedSig = crypto
-    .createHmac('sha256', secret)
+    .createHmac("sha256", secret)
     .update(signedPayload)
-    .digest('hex')
+    .digest("hex");
 
-  return computedSig === expectedSig
+  return computedSig === expectedSig;
 }
 
 // Generate random password
 function generatePassword(length = 12): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
-  let password = ''
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let password = "";
   for (let i = 0; i < length; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length))
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return password
+  return password;
 }
 
-// Send welcome email via Resend
-async function sendWelcomeEmail(email: string, name: string, tempPassword: string, tier: string): Promise<void> {
-  const resendApiKey = process.env.RESEND_API_KEY
-  if (!resendApiKey) {
-    console.log('RESEND_API_KEY not configured - skipping email')
-    return
-  }
-
+// Send welcome email via Resend SDK
+async function sendWelcomeEmail(
+  email: string,
+  name: string,
+  tempPassword: string,
+  tier: string
+): Promise<void> {
   const tierNames: Record<string, string> = {
-    feed: 'The Feed',
-    priority: 'Priority Intel',
-    executive: 'Executive Partner'
-  }
+    feed: "The Feed",
+    priority: "Priority Intel",
+    executive: "Executive Partner",
+  };
 
-  const tierName = tierNames[tier] || 'The Feed'
+  const tierName = tierNames[tier] || "The Feed";
 
   const emailHtml = `
-    <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 600px; margin: 0 auto; background: #0f172a; color: #fff; padding: 40px; border-radius: 16px;">
+    <div style="font-family: 'Inter', -apple-system, sans-serif; max-width: 600px; margin: 0 auto; background: #0f172a; color: #fff; padding: 40px; border-radius: 16px; border: 1px solid #1e293b;">
       <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: #10b981; margin: 0;">Welcome to SignalCore!</h1>
-        <p style="color: #94a3b8; margin-top: 10px;">Your ${tierName} subscription is now active</p>
+        <h1 style="color: #10b981; margin: 0; font-size: 24px; text-transform: uppercase; letter-spacing: 2px;">Welcome to SignalCore</h1>
+        <p style="color: #94a3b8; margin-top: 10px; font-weight: 500;">Your ${tierName} subscription is now active</p>
       </div>
       
-      <div style="background: #1e293b; padding: 24px; border-radius: 12px; margin-bottom: 24px;">
-        <h2 style="color: #fff; margin: 0 0 16px 0; font-size: 18px;">Your Login Credentials</h2>
-        <p style="margin: 8px 0; color: #cbd5e1;"><strong>Email:</strong> ${email}</p>
-        <p style="margin: 8px 0; color: #cbd5e1;"><strong>Temporary Password:</strong> <code style="background: #334155; padding: 4px 8px; border-radius: 4px; color: #10b981;">${tempPassword}</code></p>
+      <div style="background: #1e293b; padding: 24px; border-radius: 12px; margin-bottom: 24px; border: 1px solid #334155;">
+        <h2 style="color: #fff; margin: 0 0 16px 0; font-size: 18px; text-transform: uppercase;">Your Login Credentials</h2>
+        <p style="margin: 8px 0; color: #cbd5e1; font-size: 14px;"><strong>Email:</strong> ${email}</p>
+        <p style="margin: 8px 0; color: #cbd5e1; font-size: 14px;"><strong>Temporary Password:</strong> <code style="background: #10b98120; padding: 4px 8px; border-radius: 4px; color: #10b981; font-weight: bold;">${tempPassword}</code></p>
       </div>
       
-      <div style="text-align: center; margin-bottom: 24px;">
-        <a href="https://portal.signalcoredata.com/login" style="display: inline-block; background: #10b981; color: #fff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Access Your Portal →</a>
+      <div style="text-align: center; margin-bottom: 32px;">
+        <a href="https://portal.signalcoredata.com/login" style="display: inline-block; background: #10b981; color: #fff; padding: 14px 32px; border-radius: 10px; text-decoration: none; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; font-size: 12px;">Access Your Portal</a>
       </div>
       
-      <p style="color: #64748b; font-size: 14px; text-align: center;">
+      <p style="color: #64748b; font-size: 13px; text-align: center; line-height: 1.6;">
         We recommend changing your password after your first login.<br>
-        Questions? Reply to this email or contact leads@signalcoredata.com
+        Questions? Reply to this email or contact <a href="mailto:support@signalcoredata.com" style="color: #10b981; text-decoration: none;">support@signalcoredata.com</a>
       </p>
       
-      <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;">
+      <hr style="border: none; border-top: 1px solid #334155; margin: 32px 0;">
       
-      <p style="color: #64748b; font-size: 12px; text-align: center;">
-        SignalCore Data | Predictive Commercial HVAC Intelligence<br>
+      <p style="color: #475569; font-size: 11px; text-align: center; text-transform: uppercase; letter-spacing: 1px; font-weight: bold;">
+        SignalCore IntelliLead | Predictive Market Intelligence<br>
         Spokane, WA
       </p>
     </div>
-  `
+  `;
 
-  const postData = JSON.stringify({
-    from: 'SignalCore <noreply@signalcoredata.com>',
-    to: [email],
-    subject: `Welcome to SignalCore ${tierName}! Your login credentials`,
-    html: emailHtml
-  })
+  try {
+    const { error } = await resend.emails.send({
+      from: "SignalCore IntelliLead <welcome@signalcoredata.com>",
+      to: [email],
+      subject: `Welcome to SignalCore ${tierName}! Your login credentials`,
+      html: emailHtml,
+    });
 
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.resend.com',
-      port: 443,
-      path: '/emails',
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${resendApiKey}`,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    }, (res) => {
-      let data = ''
-      res.on('data', chunk => data += chunk)
-      res.on('end', () => {
-        if (res.statusCode === 200 || res.statusCode === 201) {
-          console.log(`Welcome email sent to ${email}`)
-          resolve()
-        } else {
-          console.error(`Email send failed: ${res.statusCode} - ${data}`)
-          resolve() // Don't fail the webhook if email fails
-        }
-      })
-    })
-    req.on('error', (e) => {
-      console.error(`Email send error: ${e.message}`)
-      resolve() // Don't fail the webhook if email fails
-    })
-    req.write(postData)
-    req.end()
-  })
+    if (error) {
+      console.error("Resend error in welcome email:", error);
+    } else {
+      console.log(`Welcome email sent to ${email}`);
+    }
+  } catch (err) {
+    console.error("Failed to send welcome email:", err);
+  }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' })
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    console.error('Missing STRIPE_WEBHOOK_SECRET')
-    return res.status(500).json({ error: 'Server configuration error' })
+    console.error("Missing STRIPE_WEBHOOK_SECRET");
+    return res.status(500).json({ error: "Server configuration error" });
   }
 
   try {
-    const rawBody = await getRawBody(req)
-    const signature = req.headers['stripe-signature'] as string
+    const rawBody = await getRawBody(req);
+    const signature = req.headers["stripe-signature"] as string;
 
     if (!signature) {
-      return res.status(400).json({ error: 'Missing signature' })
+      return res.status(400).json({ error: "Missing signature" });
     }
 
     // Verify signature
-    const isValid = verifyStripeSignature(rawBody, signature, webhookSecret)
+    const isValid = verifyStripeSignature(rawBody, signature, webhookSecret);
     if (!isValid) {
-      console.error('Invalid Stripe signature')
-      return res.status(400).json({ error: 'Invalid signature' })
+      console.error("Invalid Stripe signature");
+      return res.status(400).json({ error: "Invalid signature" });
     }
 
-    const event: StripeWebhookBody = JSON.parse(rawBody.toString())
+    const event: StripeWebhookBody = JSON.parse(rawBody.toString());
+    const session = event.data.object;
 
-    // Only handle checkout.session.completed
-    if (event.type !== 'checkout.session.completed') {
-      return res.status(200).json({ received: true })
-    }
+    // 1. Handle SUCCESSFUL payments (Checkout or recurring)
+    if (
+      event.type === "checkout.session.completed" ||
+      event.type === "invoice.payment_succeeded"
+    ) {
+      const email = session.customer_details?.email || session.customer_email;
 
-    const session = event.data.object
-    const email = session.customer_details?.email || session.customer_email
-    const name = session.customer_details?.name || 'Contractor'
-    const phone = session.customer_details?.phone || ''
-    
-    // Detect tier from payment amount (amount_total is in cents)
-    const amountInDollars = (session.amount_total || 0) / 100
-    let tier = 'feed'
-    let monthlyFee = 750
-    
-    if (amountInDollars >= 4500) {
-      tier = 'executive'
-      monthlyFee = 5000
-    } else if (amountInDollars >= 2000) {
-      tier = 'priority'
-      monthlyFee = 2500
-    } else {
-      tier = 'feed'
-      monthlyFee = 750
-    }
+      if (!email) {
+        console.warn(`No email found for event ${event.id}`);
+        return res.status(200).json({ received: true });
+      }
 
-    console.log(`Processing new subscription: ${email}, tier: ${tier}`)
+      const name = session.customer_details?.name || "Contractor";
+      const phone = session.customer_details?.phone || "";
 
-    // 1. Create Supabase Auth user
-    const tempPassword = generatePassword()
-    const { data: authData, error: authError } = await supabaseAdmin.auth.api.createUser({
-      email,
-      password: tempPassword,
-      email_confirm: true, // Auto-confirm email
-    })
+      // Detect tier from payment amount (amount_total is in cents)
+      const amountInDollars = (session.amount_total || 0) / 100;
+      let tier = "feed";
+      let monthlyFee = 750;
 
-    if (authError) {
-      console.error('Error creating auth user:', authError)
-      // User might already exist - try to get them
-      if (authError.message.includes('already registered')) {
-        console.log('User already exists, skipping auth creation')
+      if (amountInDollars >= 4500) {
+        tier = "executive";
+        monthlyFee = 5000;
+      } else if (amountInDollars >= 2000) {
+        tier = "priority";
+        monthlyFee = 2500;
+      }
+
+      console.log(`Processing subscription: ${email}, tier: ${tier}`);
+
+      let authUserId: string | undefined;
+      let tempPassword = generatePassword();
+
+      if (event.type === "checkout.session.completed") {
+        // 1. Create Supabase Auth user for new subscribers
+        const { data: authData, error: authError } =
+          await supabaseAdmin.auth.admin.createUser({
+            email,
+            password: tempPassword,
+            email_confirm: true,
+          });
+
+        if (authError) {
+          if (authError.message.includes("already registered")) {
+            console.log("User already exists, skipping auth creation");
+          } else {
+            console.error("Auth user creation error:", authError);
+          }
+        }
+        authUserId = authData?.user?.id;
+      }
+
+      // 2. Update or Create Contractor record
+      const { data: existingContractor } = await supabaseAdmin
+        .from("contractors")
+        .select("id, auth_user_id")
+        .eq("email", email)
+        .single();
+
+      if (existingContractor) {
+        await supabaseAdmin
+          .from("contractors")
+          .update({
+            tier,
+            monthly_fee: monthlyFee,
+            status: "active",
+            auth_user_id: authUserId || existingContractor.auth_user_id,
+          })
+          .eq("id", existingContractor.id);
+
+        console.log(`Updated contractor: ${email}`);
       } else {
-        throw authError
+        await supabaseAdmin.from("contractors").insert([
+          {
+            company_name: name,
+            contact_name: name,
+            email,
+            phone,
+            tier,
+            monthly_fee: monthlyFee,
+            status: "active",
+            auth_user_id: authUserId,
+          },
+        ]);
+
+        console.log(`Created new contractor: ${email}`);
+      }
+
+      // 3. Send welcome email for new checkouts
+      if (event.type === "checkout.session.completed") {
+        await sendWelcomeEmail(email, name, tempPassword, tier);
+      }
+
+      // 4. Log success activity
+      await supabaseAdmin.from("activities").insert([
+        {
+          action: "Payment Processed",
+          details: `Subscription for ${email} (${tier}) updated via Stripe`,
+        },
+      ]);
+    }
+
+    // 2. Handle CANCELLATIONS and FAILURES
+    if (
+      event.type === "customer.subscription.deleted" ||
+      event.type === "invoice.payment_failed"
+    ) {
+      const email = session.customer_email || session.customer_details?.email;
+
+      if (email) {
+        await supabaseAdmin
+          .from("contractors")
+          .update({ status: "churned" })
+          .eq("email", email);
+
+        console.log(`Contractor ${email} deactivated due to ${event.type}`);
+
+        await supabaseAdmin.from("activities").insert([
+          {
+            action: "Subscription Ended",
+            details: `Contractor ${email} status set to churned due to ${event.type}`,
+          },
+        ]);
       }
     }
 
-    const authUserId = authData?.id
-
-    // 2. Check if contractor already exists
-    const { data: existingContractor } = await supabaseAdmin
-      .from('contractors')
-      .select('id')
-      .eq('email', email)
-      .single()
-
-    if (existingContractor) {
-      // Update existing contractor
-      await supabaseAdmin
-        .from('contractors')
-        .update({
-          tier,
-          monthly_fee: monthlyFee,
-          status: 'active',
-          auth_user_id: authUserId || existingContractor.id,
-        })
-        .eq('id', existingContractor.id)
-
-      console.log(`Updated existing contractor: ${email}`)
-    } else {
-      // 3. Create new contractor record
-      const { error: contractorError } = await supabaseAdmin
-        .from('contractors')
-        .insert([{
-          company_name: name,
-          contact_name: name,
-          email,
-          phone,
-          tier,
-          monthly_fee: monthlyFee,
-          status: 'active',
-          auth_user_id: authUserId,
-        }])
-
-      if (contractorError) {
-        console.error('Error creating contractor:', contractorError)
-        throw contractorError
-      }
-
-      console.log(`Created new contractor: ${email}`)
-    }
-
-    // 4. Log activity
-    await supabaseAdmin
-      .from('activities')
-      .insert([{
-        action: 'New Subscription',
-        details: `${name} subscribed to ${tier === 'feed' ? 'The Feed' : tier === 'priority' ? 'Priority Intel' : 'Executive Partner'} ($${monthlyFee}/mo)`,
-      }])
-
-    // 5. Send welcome email with credentials
-    await sendWelcomeEmail(email, name, tempPassword, tier)
-
-    return res.status(200).json({ 
-      success: true, 
-      message: `Contractor ${email} onboarded successfully` 
-    })
-
+    return res.status(200).json({ received: true });
   } catch (error: any) {
-    console.error('Webhook error:', error)
-    return res.status(500).json({ error: error.message })
+    console.error("Webhook error:", error);
+    return res.status(500).json({ error: error.message });
   }
 }
